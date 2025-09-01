@@ -1,19 +1,17 @@
-name: Build and Push to ECR and ACR
-
+name: Build and Push to ECR
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Image tag (e.g., latest, 1.0.0)'
+        description: "Image tag (e.g., latest, 1.0.0)"
         required: true
-        default: 'latest'
+        default: "latest"
         type: string
 
 jobs:
   build-and-push:
     name: Build and Push Container Image
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,28 +29,44 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
-      - name: Build and push Docker image
+
+      # 🔍 먼저 로컬 이미지로 빌드 (스캔용)
+      - name: Build Docker image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true # 로컬 Docker에 로드
+          tags: scan-image:${{ github.event.inputs.image_tag }}
+
+      # 🛡️ 취약성 스캔 수행
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "scan-image:${{ github.event.inputs.image_tag }}"
+          format: "table"
+          exit-code: "1" # 크리티컬 취약점 발견 시 빌드 실패
+          severity: "CRITICAL,HIGH"
+
+      # 📊 스캔 결과를 GitHub Security 탭에 업로드
+      - name: Generate Trivy SARIF report
+        uses: aquasecurity/trivy-action@master
+        if: always() # 스캔 실패해도 결과 업로드
+        with:
+          image-ref: "scan-image:${{ github.event.inputs.image_tag }}"
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      # ✅ 스캔 통과 시에만 ECR에 푸시
+      - name: Build and push Docker image to ECR
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ${{ secrets.ECR_BACKEND_REPOSITORY }}:${{ github.event.inputs.image_tag }}
-            
-      # - name: Login to Azure ACR
-      #   uses: azure/docker-login@v1
-      #   with:
-      #     login-server: ${{ secrets.ACR_LOGIN_SERVER }}
-      #     username: ${{ secrets.ACR_USERNAME }}
-      #     password: ${{ secrets.ACR_PASSWORD }}
-
-      # - name: Build and push Docker image
-      #   uses: docker/build-push-action@v5
-      #   with:
-      #     context: .
-      #     push: true
-      #     tags: |
-      #       ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.ACR_REPOSITORY }}:${{ github.event.inputs.image_tag }}
-      
-  
